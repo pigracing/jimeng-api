@@ -1,7 +1,9 @@
 import _ from "lodash";
 import fs from "fs-extra";
+import axios from "axios";
 
 import APIException from "@/lib/exceptions/APIException.ts";
+
 import EX from "@/api/consts/exceptions.ts";
 import util from "@/lib/util.ts";
 import { getCredit, receiveCredit, request, parseRegionFromToken, getAssistantId, RegionInfo } from "./core.ts";
@@ -64,11 +66,13 @@ async function uploadImageFromFile(file: any, refreshToken: string, regionInfo: 
 async function uploadImageFromUrl(imageUrl: string, refreshToken: string, regionInfo: RegionInfo): Promise<string> {
   try {
     logger.info(`开始从URL下载并上传视频图片: ${imageUrl}`);
-    const imageResponse = await fetch(imageUrl);
-    if (!imageResponse.ok) {
+    const imageResponse = await axios.get(imageUrl, {
+      responseType: 'arraybuffer',
+    });
+    if (imageResponse.status < 200 || imageResponse.status >= 300) {
       throw new Error(`下载图片失败: ${imageResponse.status}`);
     }
-    const imageBuffer = await imageResponse.arrayBuffer();
+    const imageBuffer = imageResponse.data;
     return await uploadImageBuffer(imageBuffer, refreshToken, regionInfo);
   } catch (error: any) {
     logger.error(`从URL上传视频图片失败: ${error.message}`);
@@ -158,8 +162,16 @@ export async function generateVideo(
 
   // 检查积分
   const { totalCredit } = await getCredit(refreshToken);
-  if (totalCredit <= 0)
-    await receiveCredit(refreshToken);
+  if (totalCredit <= 0) {
+    logger.info("积分为 0，尝试收取今日积分...");
+    try {
+      await receiveCredit(refreshToken);
+    } catch (receiveError) {
+      logger.warn(`收取积分失败: ${receiveError.message}. 这可能是因为: 1) 今日已收取过积分, 2) 账户受到风控限制, 3) 需要在官网手动收取首次积分`);
+      throw new APIException(EX.API_VIDEO_GENERATION_FAILED,
+        `积分不足且无法自动收取。请访问即梦官网手动收取首次积分，或检查账户状态。`);
+    }
+  }
 
   // 处理首帧和尾帧图片
   let first_frame_image = undefined;
